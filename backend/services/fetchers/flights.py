@@ -29,6 +29,88 @@ _RE_AIRLINE_CODE_1 = re.compile(r"^([A-Z]{3})\d")
 _RE_AIRLINE_CODE_2 = re.compile(r"^([A-Z]{3})[A-Z\d]")
 
 
+def detect_gps_jamming_zones(
+    raw_flights: list[dict],
+    *,
+    min_aircraft: int | None = None,
+    min_ratio: float | None = None,
+    nacp_threshold: int | None = None,
+) -> list[dict]:
+    """Detect GPS interference zones from a snapshot of raw ADS-B aircraft.
+
+    Methodology mirrors GPSJam.org / Flightradar24: bin aircraft into 1°x1°
+    grid cells, flag cells where the fraction of aircraft reporting degraded
+    NACp clears a threshold.
+
+    Inputs
+    ------
+    raw_flights:
+        Iterable of dicts. Each item is expected to carry ``lat``, ``lng``
+        (or ``lon``), and ``nac_p``. Records missing position OR missing
+        ``nac_p`` entirely (typical for OpenSky-sourced flights) are
+        skipped — absence-of-data isn't evidence of anything.
+
+    nac_p == 0 IS counted as degraded. Pre-fix code skipped it on the theory
+    that "0 = old transponder, never computed accuracy." That's only half
+    right: modern Mode-S Enhanced Surveillance transponders also fall back
+    to nac_p=0 when they lose GPS lock entirely — which is exactly the
+    jamming signature we're trying to detect. Filtering 0 out was discarding
+    the strongest evidence.
+
+    Denoising:
+        1. Require ``min_aircraft`` per grid cell for statistical validity.
+        2. Subtract 1 from degraded count per cell (GPSJam's technique) so
+           a single quirky transponder can't flag an entire zone.
+        3. Require ratio ``adjusted_degraded / total > min_ratio``.
+
+    All thresholds default to the module-level constants but can be
+    overridden for testing.
+    """
+    min_aircraft = GPS_JAMMING_MIN_AIRCRAFT if min_aircraft is None else int(min_aircraft)
+    min_ratio = GPS_JAMMING_MIN_RATIO if min_ratio is None else float(min_ratio)
+    nacp_threshold = (
+        GPS_JAMMING_NACP_THRESHOLD if nacp_threshold is None else int(nacp_threshold)
+    )
+
+    jamming_grid: dict[str, dict[str, int]] = {}
+    for rf in raw_flights or []:
+        rlat = rf.get("lat")
+        rlng = rf.get("lng") if rf.get("lng") is not None else rf.get("lon")
+        if rlat is None or rlng is None:
+            continue
+        nacp = rf.get("nac_p")
+        if nacp is None:
+            continue
+        grid_key = f"{int(rlat)},{int(rlng)}"
+        cell = jamming_grid.setdefault(grid_key, {"degraded": 0, "total": 0})
+        cell["total"] += 1
+        if nacp < nacp_threshold:
+            cell["degraded"] += 1
+
+    jamming_zones: list[dict] = []
+    for gk, counts in jamming_grid.items():
+        if counts["total"] < min_aircraft:
+            continue
+        adjusted_degraded = max(counts["degraded"] - 1, 0)
+        if adjusted_degraded == 0:
+            continue
+        ratio = adjusted_degraded / counts["total"]
+        if ratio > min_ratio:
+            lat_i, lng_i = gk.split(",")
+            severity = "low" if ratio < 0.5 else "medium" if ratio < 0.75 else "high"
+            jamming_zones.append(
+                {
+                    "lat": int(lat_i) + 0.5,
+                    "lng": int(lng_i) + 0.5,
+                    "severity": severity,
+                    "ratio": round(ratio, 2),
+                    "degraded": counts["degraded"],
+                    "total": counts["total"],
+                }
+            )
+    return jamming_zones
+
+
 # ---------------------------------------------------------------------------
 # OpenSky Network API Client (OAuth2)
 # ---------------------------------------------------------------------------
@@ -724,56 +806,8 @@ def _classify_and_publish(all_adsb_flights):
         latest_data["military_flights"] = military_snapshot
 
     # --- GPS Jamming Detection ---
-    # Uses NACp (Navigation Accuracy Category – Position) from ADS-B to infer
-    # GPS interference zones, similar to GPSJam.org / Flightradar24.
-    # NACp < 8 = position accuracy worse than the FAA-mandated 0.05 NM.
-    #
-    # Denoising (to suppress false positives from old GA transponders):
-    # 1. Skip nac_p == 0 ("unknown accuracy") — old transponders that never
-    #    computed accuracy, NOT evidence of jamming.  Real jamming shows 1-7.
-    # 2. Require minimum aircraft per grid cell for statistical validity.
-    # 3. Subtract 1 from degraded count per cell (GPSJam's technique) so a
-    #    single quirky transponder can't flag an entire zone.
-    # 4. Require the adjusted ratio to exceed the threshold.
     try:
-        jamming_grid = {}
-        raw_flights = raw_flights_snapshot
-        for rf in raw_flights:
-            rlat = rf.get("lat")
-            rlng = rf.get("lng") or rf.get("lon")
-            if rlat is None or rlng is None:
-                continue
-            nacp = rf.get("nac_p")
-            if nacp is None or nacp == 0:
-                continue
-            grid_key = f"{int(rlat)},{int(rlng)}"
-            if grid_key not in jamming_grid:
-                jamming_grid[grid_key] = {"degraded": 0, "total": 0}
-            jamming_grid[grid_key]["total"] += 1
-            if nacp < GPS_JAMMING_NACP_THRESHOLD:
-                jamming_grid[grid_key]["degraded"] += 1
-
-        jamming_zones = []
-        for gk, counts in jamming_grid.items():
-            if counts["total"] < GPS_JAMMING_MIN_AIRCRAFT:
-                continue
-            adjusted_degraded = max(counts["degraded"] - 1, 0)
-            if adjusted_degraded == 0:
-                continue
-            ratio = adjusted_degraded / counts["total"]
-            if ratio > GPS_JAMMING_MIN_RATIO:
-                lat_i, lng_i = gk.split(",")
-                severity = "low" if ratio < 0.5 else "medium" if ratio < 0.75 else "high"
-                jamming_zones.append(
-                    {
-                        "lat": int(lat_i) + 0.5,
-                        "lng": int(lng_i) + 0.5,
-                        "severity": severity,
-                        "ratio": round(ratio, 2),
-                        "degraded": counts["degraded"],
-                        "total": counts["total"],
-                    }
-                )
+        jamming_zones = detect_gps_jamming_zones(raw_flights_snapshot)
         with _data_lock:
             latest_data["gps_jamming"] = jamming_zones
         if jamming_zones:
