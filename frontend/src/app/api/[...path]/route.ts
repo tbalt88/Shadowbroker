@@ -190,6 +190,21 @@ function isSameOriginOrNonBrowser(req: NextRequest): boolean {
   }
 }
 
+function canUseEnvAdminKey(req: NextRequest, pathSegments: string[]): boolean {
+  const joined = pathSegments.join('/');
+  const origin = req.headers.get('origin');
+
+  // /api/refresh is a state-changing GET. A browser can trigger a no-Origin
+  // GET through ambient mechanisms such as image/script navigation, so do not
+  // give that shape the server-side ADMIN_KEY fallback. Valid admin-session
+  // cookies are still handled separately below.
+  if (joined === 'refresh' && req.method.toUpperCase() === 'GET' && !origin) {
+    return false;
+  }
+
+  return isSameOriginOrNonBrowser(req);
+}
+
 async function proxy(req: NextRequest, pathSegments: string[]): Promise<NextResponse> {
   try {
     const isMesh = pathSegments[0] === 'mesh';
@@ -311,7 +326,7 @@ async function proxy(req: NextRequest, pathSegments: string[]): Promise<NextResp
       // ADMIN_KEY just by being open in the same browser.
       const cookieToken = req.cookies.get(ADMIN_COOKIE)?.value || '';
       const sessionAdminKey = resolveAdminSessionToken(cookieToken) || '';
-      const allowEnvKeyInjection = isSameOriginOrNonBrowser(req);
+      const allowEnvKeyInjection = canUseEnvAdminKey(req, pathSegments);
       let injectedAdmin = '';
       if (sessionAdminKey) {
         // Authenticated session always works — Origin doesn't matter
