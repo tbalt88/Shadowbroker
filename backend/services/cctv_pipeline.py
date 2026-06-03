@@ -1012,14 +1012,33 @@ def _extract_img_src(html_fragment: str):
 class MadridCityIngestor(BaseCCTVIngestor):
     """Madrid City Hall traffic cameras from datos.madrid.es KML feed."""
 
-    KML_URL = "http://datos.madrid.es/egob/catalogo/202088-0-trafico-camaras.kml"
+    KML_URL_HTTPS = "https://datos.madrid.es/egob/catalogo/202088-0-trafico-camaras.kml"
+    KML_URL_HTTP = "http://datos.madrid.es/egob/catalogo/202088-0-trafico-camaras.kml"
+
+    def _fetch_kml(self):
+        """Prefer HTTPS; fall back to legacy HTTP if the catalog is HTTP-only (#363)."""
+        last_error: Exception | None = None
+        for url in (self.KML_URL_HTTPS, self.KML_URL_HTTP):
+            try:
+                response = fetch_with_curl(url, timeout=20)
+                response.raise_for_status()
+                if url == self.KML_URL_HTTP:
+                    logger.warning(
+                        "MadridCityIngestor: HTTPS KML unavailable, using HTTP catalog feed"
+                    )
+                return response
+            except Exception as e:
+                last_error = e
+                logger.debug("MadridCityIngestor: KML fetch failed for %s: %s", url, e)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Madrid KML fetch failed")
 
     def fetch_data(self) -> List[Dict[str, Any]]:
         import defusedxml.ElementTree as ET
 
         try:
-            response = fetch_with_curl(self.KML_URL, timeout=20)
-            response.raise_for_status()
+            response = self._fetch_kml()
         except Exception as e:
             logger.error(f"MadridCityIngestor: failed to fetch KML: {e}")
             return []

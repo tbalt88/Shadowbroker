@@ -1,3 +1,4 @@
+import os
 import requests
 import logging
 import zipfile
@@ -20,6 +21,50 @@ logger = logging.getLogger(__name__)
 # Cache Frontline data for 30 minutes, it doesn't move that fast
 frontline_cache = TTLCache(maxsize=1, ttl=1800)
 
+_DEFAULT_DEEPSTATE_MIRROR_REPO = "cyterat/deepstate-map-data"
+
+
+def _deepstate_mirror_ref() -> tuple[str, str]:
+    """Return (github_repo_slug, git_ref) for the DeepState mirror.
+
+    When ``DEEPSTATE_MIRROR_COMMIT`` is set, ingest is pinned to that immutable
+    SHA instead of following the mutable ``main`` branch (#362).
+    """
+    repo = (os.environ.get("DEEPSTATE_MIRROR_REPO") or _DEFAULT_DEEPSTATE_MIRROR_REPO).strip()
+    if repo.count("/") != 1:
+        repo = _DEFAULT_DEEPSTATE_MIRROR_REPO
+    commit = (os.environ.get("DEEPSTATE_MIRROR_COMMIT") or "").strip()
+    ref = commit if commit else "main"
+    return repo, ref
+
+
+def _latest_deepstate_geo_path(tree_items: list) -> str | None:
+    geo_files = [
+        item["path"]
+        for item in tree_items
+        if isinstance(item, dict)
+        and str(item.get("path", "")).startswith("data/deepstatemap_data_")
+        and str(item.get("path", "")).endswith(".geojson")
+    ]
+    return sorted(geo_files)[-1] if geo_files else None
+
+
+def _annotate_deepstate_geojson(data: dict) -> dict:
+    name_map = {
+        0: "Russian-occupied areas",
+        1: "Russian advance",
+        2: "Liberated area",
+        3: "Russian-occupied areas",  # Crimea / LPR / DPR
+        4: "Directions of UA attacks",
+    }
+    if "features" in data:
+        for idx, feature in enumerate(data["features"]):
+            if "properties" not in feature or feature["properties"] is None:
+                feature["properties"] = {}
+            feature["properties"]["name"] = name_map.get(idx, "Russian-occupied areas")
+            feature["properties"]["zone_id"] = idx
+    return data
+
 
 @cached(frontline_cache)
 def fetch_ukraine_frontlines():
@@ -27,67 +72,34 @@ def fetch_ukraine_frontlines():
     Fetches the latest GeoJSON data representing the Ukraine frontline.
     We use the cyterat/deepstate-map-data github mirror since the public API is locked.
     """
+    repo, ref = _deepstate_mirror_ref()
     try:
-        logger.info("Fetching DeepStateMap from GitHub mirror...")
+        logger.info("Fetching DeepStateMap from GitHub mirror (%s @ %s)...", repo, ref)
 
-        # First, query the repo tree to find the latest file name
-        tree_url = (
-            "https://api.github.com/repos/cyterat/deepstate-map-data/git/trees/main?recursive=1"
-        )
+        tree_url = f"https://api.github.com/repos/{repo}/git/trees/{ref}?recursive=1"
         res_tree = requests.get(tree_url, timeout=10)
 
         if res_tree.status_code == 200:
-            tree_data = res_tree.json().get("tree", [])
-            # Filter for geojson files in data folder
-            geo_files = [
-                item["path"]
-                for item in tree_data
-                if item["path"].startswith("data/deepstatemap_data_")
-                and item["path"].endswith(".geojson")
-            ]
-
-            if geo_files:
-                # Get the alphabetically latest file (since it's named with YYYYMMDD)
-                latest_file = sorted(geo_files)[-1]
-
-                raw_url = f"https://raw.githubusercontent.com/cyterat/deepstate-map-data/main/{latest_file}"
-                logger.info(f"Downloading latest DeepStateMap: {raw_url}")
+            latest_file = _latest_deepstate_geo_path(res_tree.json().get("tree", []))
+            if latest_file:
+                raw_url = f"https://raw.githubusercontent.com/{repo}/{ref}/{latest_file}"
+                logger.info("Downloading DeepStateMap: %s", raw_url)
 
                 res_geo = requests.get(raw_url, timeout=20)
                 if res_geo.status_code == 200:
-                    data = res_geo.json()
-
-                    # The Cyterat GitHub mirror strips all properties and just provides a raw array of Feature polygons.
-                    # Based on DeepStateMap's frontend mapping, the array index corresponds to the zone type:
-                    # 0: Russian-occupied areas
-                    # 1: Russian advance
-                    # 2: Liberated area
-                    # 3: Uncontested/Crimea (often folded into occupied)
-                    name_map = {
-                        0: "Russian-occupied areas",
-                        1: "Russian advance",
-                        2: "Liberated area",
-                        3: "Russian-occupied areas",  # Crimea / LPR / DPR
-                        4: "Directions of UA attacks",
-                    }
-
-                    if "features" in data:
-                        for idx, feature in enumerate(data["features"]):
-                            if "properties" not in feature or feature["properties"] is None:
-                                feature["properties"] = {}
-
-                            feature["properties"]["name"] = name_map.get(
-                                idx, "Russian-occupied areas"
-                            )
-                            feature["properties"]["zone_id"] = idx
-
-                    return data
-                else:
-                    logger.error(
-                        f"Failed to fetch parsed Github Raw GeoJSON: {res_geo.status_code}"
-                    )
+                    return _annotate_deepstate_geojson(res_geo.json())
+                logger.error(
+                    "Failed to fetch parsed Github Raw GeoJSON: %s", res_geo.status_code
+                )
+            else:
+                logger.error("No deepstatemap_data_*.geojson files in mirror tree at %s", ref)
         else:
-            logger.error(f"Failed to fetch Github Tree for Deepstatemap: {res_tree.status_code}")
+            logger.error(
+                "Failed to fetch Github tree for Deepstatemap (%s @ %s): %s",
+                repo,
+                ref,
+                res_tree.status_code,
+            )
     except (requests.RequestException, ConnectionError, TimeoutError, ValueError, KeyError) as e:
         logger.error(f"Error fetching DeepStateMap: {e}")
     return None

@@ -198,6 +198,7 @@ graphify-out/
 # Internal docs & brainstorming (never commit)
 # ========================
 docs/*
+!docs/OUTBOUND_DATA.md
 !docs/mesh/
 docs/mesh/*
 !docs/mesh/threat-model.md
