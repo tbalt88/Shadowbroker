@@ -993,19 +993,17 @@ def start_scheduler():
         misfire_grace_time=600,
     )
 
-    # UAP sightings (NUFORC) — weekly on Mondays at 12:00 UTC. The layer is a
-    # rolling last-60-days digest; refreshing once a week is enough cadence
-    # for human-readable map exploration and keeps load on nuforc.org light.
+    # UAP sightings (NUFORC) — daily at 12:00 UTC. Rolling ~60-day window from
+    # live nuforc.org; disk cache is re-validated on every read.
     _scheduler.add_job(
         lambda: _run_task_with_health(
             lambda: fetch_uap_sightings(force_refresh=True),
             "fetch_uap_sightings",
         ),
         "cron",
-        day_of_week="mon",
         hour=12,
         minute=0,
-        id="uap_sightings_weekly",
+        id="uap_sightings_daily",
         max_instances=1,
         misfire_grace_time=3600,
     )
