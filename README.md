@@ -19,7 +19,7 @@
 
 **ShadowBroker** is a decentralized intelligence platform that aggregates real-time, multi-domain OSINT telemetry from 60+ live intelligence feeds into a single dark-ops map interface. Aircraft, ships, satellites, conflict zones, CCTV networks, GPS jamming, internet-connected devices, police scanners, mesh radio nodes, and breaking geopolitical events — all updating in real time on one screen as well as an obfuscated communications protocol and information exchange infrastructure.
 
-Built with **Next.js**, **MapLibre GL**, **FastAPI**, and **Python**. 35+ toggleable data layers, including SAR ground-change detection. Multiple visual modes (DEFAULT / SATELLITE / FLIR / NVG / CRT). Right-click any point on Earth for a country dossier, head-of-state lookup, and the latest Sentinel-2 satellite photo. ShadowBroker has no accounts, product telemetry, or analytics; the dashboard talks to your self-hosted backend, while optional live OSINT panels may contact their configured public data providers when you use them.
+Built with **Next.js**, **MapLibre GL**, **FastAPI**, and **Python**. 40+ toggleable data layers, including SAR ground-change detection, a **server-side recon toolkit** (DNS, WHOIS, sanctions, BGP, IP sweep, and more), supply-chain risk overlays, and malware/C2 threat feeds. Multiple visual modes (DEFAULT / SATELLITE / FLIR / NVG / CRT). Right-click any point on Earth for a country dossier, head-of-state lookup, entity-graph expansion, and the latest Sentinel-2 satellite photo. ShadowBroker has no accounts, product telemetry, or analytics; the dashboard talks to your self-hosted backend. Sensitive recon and Shodan queries never hit third-party APIs from the browser — they are proxied through the backend with SSRF guards and local-operator auth.
 
 Designed for analysts, researchers, radio operators, and anyone who wants to see what the world looks like when every public signal is on the same map.
 
@@ -30,16 +30,18 @@ A surprising amount of global telemetry is already public — aircraft ADS-B bro
 
 The project does not introduce new surveillance capabilities — it aggregates and visualizes existing public datasets. It is fully open-source so anyone can audit exactly what data is accessed and how. ShadowBroker does not include product telemetry, analytics, or accounts. Operator-supplied keys stay in your local deployment, but live OSINT features necessarily make outbound requests to the public data providers you enable or query.
 
-### Shodan Connector
+### Shodan & Recon (security-first)
 
-ShadowBroker includes an optional Shodan connector for operator-supplied API access. Shodan results are fetched with your own `SHODAN_API_KEY`, rendered as a local investigative overlay (not merged into core feeds), and remain subject to Shodan’s terms of service.
+ShadowBroker includes an optional **Shodan connector** for operator-supplied API access (`SHODAN_API_KEY`) and a **Recon Toolkit** panel for keyless OSINT lookups. Both run **server-side only**: the browser calls your self-hosted `/api/osint/*` and `/api/tools/shodan/*` routes; outbound requests are made by the backend after SSRF validation. Recon requires **local-operator** access (same trust model as layer toggles and admin routes). Shodan results render as a separate map overlay and remain subject to Shodan’s terms of service.
+
+> **Not included:** embedded live-news YouTube grids or a built-in Gemini AI analyst panel — use the **OpenClaw / agent channel** for AI-assisted analysis instead.
 
 ---
 
 ## Interesting Use Cases
 
 * **Track Air Force One**, the private jets of billionaires and dictators, and every military tanker, ISR, and fighter broadcasting ADS-B. Air Force One and all of the accompanying Presidential/Vice Presidential planes are highlighted and monitored from the moment they leave the ground. 
-* **Connect an AI agent as a co-analyst** through ShadowBroker's HMAC-signed agentic command channel — supports OpenClaw and any other agent that speaks the protocol (Claude, GPT, LangChain, custom). The agent gets full read/write access to all 35+ data layers, pin placement, map control, SAR ground-change, mesh networking, and alert delivery. It sees everything the operator sees and can take actions on the map in real time.
+* **Connect an AI agent as a co-analyst** through ShadowBroker's HMAC-signed agentic command channel — supports OpenClaw and any other agent that speaks the protocol (Claude, GPT, LangChain, custom). The agent gets full read/write access to all 40+ data layers, pin placement, map control, SAR ground-change, mesh networking, and alert delivery. It sees everything the operator sees and can take actions on the map in real time.
 * **Communicate on the InfoNet testnet** — The first decentralized intelligence mesh built into an OSINT tool. Obfuscated messaging with gate personas, Dead Drop peer-to-peer exchange, and a built-in terminal CLI. No accounts, no signup. Privacy is not guaranteed yet — this is an experimental testnet — but the protocol is live and being hardened.
 * **Right-click anywhere on Earth** for a country dossier (head of state, population, languages), Wikipedia summary, and the latest Sentinel-2 satellite photo at 10m resolution
 * **Click a KiwiSDR node** and tune into live shortwave radio directly in the dashboard. Click a police scanner feed and eavesdrop in one click.
@@ -55,6 +57,11 @@ ShadowBroker includes an optional Shodan connector for operator-supplied API acc
 * **Track trains** across the US (Amtrak) and Europe (DigiTraffic) in real time
 * **Estimate where US aircraft carriers are** using automated GDELT news scraping — no other open tool does this
 * **Search internet-connected devices worldwide** via Shodan — cameras, SCADA systems, databases — plotted as a live overlay on the map
+* **Run a full recon toolkit** from the left sidebar — IP geolocation, DNS, RDAP/WHOIS, certificate transparency, BGP/ASN, OFAC sanctions search, CVE lookup, Tor/OTX threat checks, and subnet sweeps (InternetDB proxied server-side)
+* **Expand an entity graph** when you select an aircraft, vessel, company, or IP — Wikidata + OFAC + live store cross-links rendered in the Entity Graph panel
+* **Monitor supply-chain risk** — Tier 1/2 semiconductor and battery fabs scored against nearby earthquakes, wildfires, and conflict events (SCM panel)
+* **Toggle malware C2 hotspots** — abuse.ch Feodo Tracker + URLhaus feeds mapped by country (opt-in layer)
+* **Overlay global submarine cables** — static TeleGeography-derived cable routes (opt-in layer)
 
 
 ---
@@ -239,11 +246,26 @@ The first decentralized intelligence communication and governance layer built di
 
 > **Experimental Testnet — No Privacy Guarantee:** InfoNet messages are obfuscated but NOT end-to-end encrypted. The Mesh network (Meshtastic/APRS) is NOT private — radio transmissions are inherently public. The privacy primitive contracts are scaffolded but not yet wired. Do not send anything sensitive on any channel. Treat all channels as open and public for now.
 
-### 🔍 Shodan Device Search (NEW in v0.9.6)
+### 🔍 Recon Toolkit & Shodan (Osiris-derived, security-first)
 
-* **Internet Device Search** — Query Shodan directly from ShadowBroker. Search by keyword, CVE, port, or service — results plotted as a live overlay on the map
+Adapted from the [OSIRIS](https://github.com/simplifaisoul/osiris) recon stack (MIT) with ShadowBroker’s proxy model. Attribution: `backend/third_party/osiris/NOTICE.md`.
+
+**Recon Toolkit** (left sidebar — local operator only):
+
+* **IP / DNS / WHOIS** — ip-api.com geolocation, Google DNS-over-HTTPS, RDAP registrant data with optional HTTP security header scoring
+* **Certificates & BGP** — crt.sh subdomain discovery, bgpview.io ASN/prefix lookups
+* **Threat intel** — AlienVault OTX pulses, Tor exit-node checks, optional per-IP/domain reputation
+* **Sanctions** — OpenSanctions `us_ofac_sdn` index (CC-BY); cross-checks on WHOIS entities and IP ISP/org strings
+* **CVE / MAC / GitHub / leaks** — MITRE CVE API, MAC vendor lookup, GitHub profile recon, public breach checks
+* **IP sweep** — `/api/osint/sweep/scan` geolocates a target /24–/32 and proxies Shodan InternetDB host discovery server-side (browser never contacts InternetDB directly)
+* **SSRF guard** — Private, loopback, link-local, and metadata hostnames are blocked before any user-supplied fetch
+
+**Entity graph** — Select any map entity to open the Entity Graph panel (`GET /api/entity/expand`). Resolves aircraft, vessels, companies, persons, IPs, and countries into a node/link graph (Wikidata SPARQL + OFAC + in-memory flight/ship store).
+
+**Shodan overlay** (unchanged):
+
+* **Internet Device Search** — Query Shodan with your own API key; results plotted as a live overlay
 * **Configurable Markers** — Shape, color, and size customization for Shodan results
-* **Operator-Supplied API** — Uses your own `SHODAN_API_KEY`; results rendered as a local investigative overlay
 
 ### 🛩️ Aviation Tracking
 
@@ -331,11 +353,12 @@ The first decentralized intelligence communication and governance layer built di
 
 ### 📷 Surveillance
 
-* **CCTV Mesh** — 11,000+ live traffic cameras from 13 sources across 6 countries:
+* **CCTV Mesh** — 22,000+ live traffic cameras from 21 ingestors across 10 countries (US, UK, Canada, Australia, Austria, Spain, Singapore, Netherlands when NDW feed is up, plus OSM):
   * 🇬🇧 Transport for London JamCams
   * 🇺🇸 NYC DOT, Austin TX (TxDOT)
   * 🇺🇸 California (12 Caltrans districts), Washington State (WSDOT), Georgia DOT, Illinois DOT, Michigan DOT
   * 🇪🇸 Spain DGT National (20 cities), Madrid City (357 cameras via KML)
+  * 🇦🇹 Austria ASFINAG motorway webcams
   * 🇸🇬 Singapore LTA
   * 🌍 Windy Webcams
 * **Feed Rendering** — Automatic detection & rendering of video, MJPEG, HLS, embed, satellite tile, and image feeds
@@ -356,6 +379,11 @@ The first decentralized intelligence communication and governance layer built di
 * **Data Center Mapping** — 2,000+ global data centers plotted from a curated dataset. Clustered purple markers with server-rack icons. Click for operator, location, and automatic internet outage cross-referencing by country.
 * **Military Bases** — Global military installation and missile facility database (NEW)
 * **Power Plants** — 35,000+ global power plants from the WRI database (NEW)
+* **Submarine Cables** — Global undersea cable routes from static TeleGeography-derived GeoJSON (`frontend/public/data/submarine-cables.json`). Opt-in line overlay.
+* **Malware C2 Layer** — Botnet C2 servers (Feodo Tracker) and recent malware URLs (URLhaus) from abuse.ch, refreshed on the slow tier when the layer is enabled.
+* **SCM Supplier Risk** — Tier 1/2 fabs and battery plants (TSMC, Samsung, CATL, etc.) cross-referenced against earthquakes, FIRMS fires, and GDELT conflict proximity. Alerts in the SCM panel; optional map layer.
+* **Cyber Threats Feed** — Recent CISA Known Exploited Vulnerabilities (KEV) entries exposed via `/api/cyber-threats` and the layer toggle.
+* **Country Risk Index** — Static geopolitical risk scores with USGS earthquake enrichment via `/api/country-risk`.
 
 ### 🌐 Additional Layers & Tools
 
@@ -381,7 +409,7 @@ v0.9.7 turns ShadowBroker from a dashboard a human watches into an intelligence 
 
 **Capabilities:**
 
-* **Full Telemetry Access** — The agent queries all 35+ data layers: flights, ships, satellites, SIGINT, conflict events, earthquakes, fires, wastewater, prediction markets, and more. Fast and slow tier endpoints return enriched data with geographic coordinates, timestamps, and source attribution.
+* **Full Telemetry Access** — The agent queries all 40+ data layers: flights, ships, satellites, SIGINT, conflict events, earthquakes, fires, wastewater, malware/C2, SCM overlays, prediction markets, and more. Fast and slow tier endpoints return enriched data with geographic coordinates, timestamps, and source attribution.
 * **AI Intel Pins** — Place color-coded investigation markers directly on the operator's map. 14 pin categories (threat, anomaly, military, maritime, aviation, SIGINT, infrastructure, etc.) with confidence scores, TTL expiry, source URLs, and batch placement up to 100 pins at once.
 * **Map Control** — Fly the operator's map view to any coordinate, trigger satellite imagery lookups, and open region dossiers. The agent can direct the operator's attention to specific locations in real time.
 * **SAR Ground-Change** — Query SAR anomaly feeds, inspect pin details, manage AOIs, and fly the map to watch areas. The agent can monitor for ground deformation, flood extent, or damage and promote anomalies to pins.
@@ -543,9 +571,19 @@ ShadowBroker v0.9.7 is composed of three vertically-stacked planes — the **Ope
 | [GDELT Project](https://www.gdeltproject.org) | Global conflict events | ~6h | No |
 | [DeepState Map](https://deepstatemap.live) | Ukraine frontline | ~30min | No |
 | [Shodan](https://www.shodan.io) | Internet-connected device search | On-demand | **Yes** |
+| [OpenSanctions](https://www.opensanctions.org) | OFAC SDN sanctions index (recon + entity graph) | 24h cache | No |
+| [abuse.ch Feodo + URLhaus](https://abuse.ch) | Malware C2 / distribution URLs | ~5min (opt-in layer) | No |
+| [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) | Known exploited CVEs | ~5min (opt-in layer) | No |
+| [ip-api.com](https://ip-api.com) | IP geolocation (recon, entity graph) | On-demand | No |
+| [Google Public DNS](https://dns.google) | DNS-over-HTTPS lookups (recon) | On-demand | No |
+| [RDAP.org](https://rdap.org) | Domain registration data (recon) | On-demand | No |
+| [crt.sh](https://crt.sh) | Certificate transparency (recon) | On-demand | No |
+| [bgpview.io](https://bgpview.io) | BGP/ASN routing (recon) | On-demand | No |
+| TeleGeography (static) | Submarine cable routes | Static | No |
+| [ASFINAG](https://www.asfinag.at) | Austria motorway webcams | ~10min | No |
 | [Amtrak](https://www.amtrak.com) | US train positions | ~60s | No |
 | [DigiTraffic](https://www.digitraffic.fi) | European rail positions | ~60s | No |
-| [Global Fishing Watch](https://globalfishingwatch.org) | Fishing vessel activity events | ~10min | No |
+| [Global Fishing Watch](https://globalfishingwatch.org) | Fishing vessel activity events | ~1hr | **Yes** (`GFW_API_TOKEN`) |
 | Transport for London, NYC DOT, TxDOT | CCTV cameras (UK, US) | ~10min | No |
 | Caltrans, WSDOT, GDOT, IDOT, MDOT | CCTV cameras (5 US states) | ~10min | No |
 | Spain DGT, Madrid City | CCTV cameras (Spain) | ~10min | No |
@@ -821,7 +859,7 @@ AIS-catcher decodes VHF radio signals on 161.975 MHz and 162.025 MHz and POSTs d
 
 ## 🎛️ Data Layers
 
-All 37 layers are independently toggleable from the left panel:
+All 41 layers are independently toggleable from the left panel:
 
 | Layer | Default | Description |
 |---|---|---|
@@ -863,6 +901,20 @@ All 37 layers are independently toggleable from the left panel:
 | VIIRS Nightlights | ❌ OFF | Night-time light change detection |
 | Power Plants | ❌ OFF | 35,000+ global power plants |
 | Shodan Overlay | ❌ OFF | Internet device search results |
+| Road Freight Trends | ❌ OFF | Sentinel-2 truck-motion trends on major highways (Analyze Here) |
+| Submarine Cables | ❌ OFF | Global undersea cable routes (static GeoJSON) |
+| Malware C2 | ❌ OFF | abuse.ch Feodo + URLhaus threat points |
+| SCM Suppliers | ❌ OFF | Tier 1/2 supply-chain risk markers + panel alerts |
+| Cyber Threats | ❌ OFF | Recent CISA KEV entries (stats in slow-tier payload) |
+| SAR | ✅ ON | Synthetic aperture radar catalog + anomaly alerts |
+
+**Recon & entity tools** (not map layers — left sidebar / selection):
+
+| Tool | Access | Description |
+|---|---|---|
+| Recon Toolkit | Local operator | DNS, WHOIS, sanctions, BGP, CVE, sweep, etc. via `/api/osint/*` |
+| SCM Risk panel | Local operator | Live supplier threat rollup via `/api/scm-suppliers` |
+| Entity Graph | Local operator | Graph expansion on selected entities via `/api/entity/expand` |
 
 ---
 
@@ -895,7 +947,16 @@ Shadowbroker/
 │   │   ├── data_fetcher.py         # Core scheduler — orchestrates all data sources
 │   │   ├── ais_stream.py           # AIS WebSocket client (25K+ vessels)
 │   │   ├── carrier_tracker.py      # OSINT carrier position estimator (GDELT news scraping)
-│   │   ├── cctv_pipeline.py        # 13-source CCTV camera ingestion pipeline
+│   │   ├── cctv_pipeline.py        # 14-source CCTV camera ingestion pipeline
+│   │   ├── ssrf_guard.py           # SSRF validation for operator recon fetches
+│   │   ├── sanctions/ofac.py       # OpenSanctions OFAC SDN index
+│   │   ├── osint/lookups.py        # Server-side recon lookups (Osiris port)
+│   │   ├── osint_intel/resolve.py  # Entity graph resolver (Wikidata + OFAC)
+│   │   ├── scm/suppliers.py        # Supply-chain risk overlay
+│   │   ├── intel_feeds/            # Country risk index helpers
+│   │   ├── fetchers/malware.py     # abuse.ch Feodo + URLhaus
+│   │   ├── fetchers/cyber_status.py # CISA KEV feed
+│   │   ├── third_party/osiris/     # MIT attribution for Osiris-derived code
 │   │   ├── geopolitics.py          # GDELT + Ukraine frontline + air alerts
 │   │   ├── region_dossier.py       # Right-click country/city intelligence
 │   │   ├── radio_intercept.py      # Police scanner feeds + OpenMHZ
@@ -933,7 +994,14 @@ Shadowbroker/
 │   │       ├── mesh_reputation.py  # Node reputation scoring
 │   │       ├── mesh_oracle.py      # Oracle consensus protocol
 │   │       └── mesh_secure_storage.py # Secure credential storage
+│   ├── routers/
+│   │   ├── osint.py                # /api/osint/* recon routes (local operator)
+│   │   ├── entity_graph.py         # /api/entity/expand
+│   │   ├── scm.py                  # /api/scm-suppliers
+│   │   └── intel_feeds.py          # /api/malware, /api/cyber-threats, /api/country-risk
 ├── frontend/
+│   ├── public/data/
+│   │   └── submarine-cables.json   # Static undersea cable GeoJSON
 │   ├── src/
 │   │   ├── app/
 │   │   │   └── page.tsx            # Main dashboard — state, polling, layout
@@ -942,7 +1010,11 @@ Shadowbroker/
 │   │       ├── MeshChat.tsx        # InfoNet / Mesh / Dead Drop chat panel
 │   │       ├── MeshTerminal.tsx    # Draggable CLI terminal
 │   │       ├── NewsFeed.tsx        # SIGINT feed + entity detail panels
-│   │       ├── WorldviewLeftPanel.tsx   # Data layer toggles (35+ layers)
+│   │       ├── WorldviewLeftPanel.tsx   # Data layer toggles (40+ layers)
+│   │       ├── ShodanPanel.tsx          # Shodan device search overlay
+│   │       ├── ReconPanel.tsx           # Server-side OSINT recon toolkit
+│   │       ├── ScmPanel.tsx             # Supply-chain risk command panel
+│   │       ├── EntityGraphPanel.tsx     # Entity graph on map selection
 │   │       ├── WorldviewRightPanel.tsx  # Search + filter sidebar
 │   │       ├── AdvancedFilterModal.tsx  # Airport/country/owner filtering
 │   │       ├── MapLegend.tsx       # Dynamic legend with all icons
